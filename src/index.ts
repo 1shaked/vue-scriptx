@@ -1,106 +1,91 @@
-import { App, h } from 'vue'
-import Utils from './utils'
-
-class VueScriptX {
+import { App} from 'vue'
+class VueScriptPlacer {
     installed = false
-    promise = Promise.resolve()
-    
-    loaded: Record<string, Promise<any>> = {}
-    props: Array<string> = ['unload', 'src', 'type', 'async', 'integrity', 'text', 'crossorigin']
-    
+    props = {
+        src: {
+            type: String,
+            required: false
+        },
+        type: {
+            type: String,
+            default: 'text/javascript'
+        },
+        crossorigin: {
+            type: String,
+            required: false
+        },
+        async: {
+            type: Boolean,
+            required: false
+        },
+        scriptLocation: {
+            type: String,
+            required: false,
+            default: 'body',
+            validator(val: string): Boolean {
+                return ['body', 'head'].indexOf(val) !== -1 
+            }
+        },
+        removeOnUnmount: {
+            type: Boolean,
+            required: false,
+            default: true
+        }
+    }
     install (app: App): void {
-        app.config.globalProperties.$scriptx = this
+        app.config.globalProperties.$scriptPlacer = this
 
-        let self = this
+        const self = this
         if (self.installed) return
         
-        app.component('scriptx', {
+        app.component('scriptPlacer', {
             props: self.props,
             // Uses render method with <slot>s, see: https://v3.vuejs.org/guide/render-function.html
-            render () {
-                return h(
-                    'div',
-                    { style: 'display:none' },
-                    this.$slots.default ? this.$slots.default(): undefined,
-                )
+            template: `
+            <template>
+                <div :key="reload" style="display: none;">
+                    <div :id="elementId" />
+                </div>
+            </template>`,
+            data(){
+                return {
+                    elementId: 'id' + Math.random().toString(16)
+                }
             },
             mounted () {
-                let parent = this.$el.parentElement
-                if (!this.src) {
-                    self.promise = self.promise
-                    .then(() => {
-                        let script = document.createElement('script')
-                        let el = this.$el.innerHTML
-                        el = el.replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/&amp;/gi, '&')
-                        script.type = 'text/javascript'
-                        script.appendChild(document.createTextNode(el))
-                        parent.appendChild(script)
-                        this.$emit('loaded') // any other proper way to do this or emit error?
-                    })
+                const scriptTag: string = 'script'
+                const scriptType = 'text/javascript'
+                let scriptElement: HTMLElement | null = this?.$el || document.getElementById(this?.elementId)
+                const headDocument = document.createElement(scriptTag);
+                headDocument.async = this.async || false;
+                headDocument.type = this.type || scriptType;
+                headDocument.text = this?.$slots?.default() || ''
+                if (!!this.src) { // when the src is giving craete this elemnt
+                    headDocument.src = this.src;
+                }
+                if (this.scriptLocation === 'head') { // where to load the script
+                    document.head.appendChild(headDocument)
                 } else {
-                    let opts = Utils.omitBy(Utils.pick(this, self.props), Utils.isUndefined)
-                    opts.parent = parent
-                    // this syntax results in an implicit return
-                    let load = () => {
-                        self.load (this.src, opts)
-                        .then(
-                            () => this.$emit('loaded'),
-                            (err: any) => this.$emit('error', err)
-                        )
-                    }
-                    if (Utils.isUndefined(this.async) || this.async === 'false')
-                        self.promise = self.promise.then(load) // serialize execution
-                    else
-                        load() // inject immediately
+                    scriptElement?.parentElement?.appendChild(headDocument)
                 }
                 this.$nextTick(() => {
                     this.$el.parentElement.removeChild(this.$el)
                     // NOTE: this.$el.remove() may be used, but IE sucks, see: https://github.com/taoeffect/vue-script2/pull/17
                 })
             },
-            unmounted () {
-                if (this.unload) {
-                    new Function(this.unload)() // eslint-disable-line
-                    delete self.loaded[this.src]
-                }
+            unmounted () { // when component unmonuted remove the script
+                if (this.removeOnUnmount) this.$el.parentElement.removeChild(this.$el)
             }
         })
         self.installed = true
     }
-    
-    load (src: string, opts: Record<string, any> = { parent: document.head }): Promise<any> {
-        if (!this.loaded[src]) {
-            this.loaded[src] = new Promise((resolve, reject) => {
-                let script = document.createElement('script')
-
-                // omit the special options that VueScriptX supports
-                Utils.defaults(script, Utils.omit(opts, ['unload', 'parent']), { type: 'text/javascript' })
-
-                // async may not be used with 'document.write'
-                script.async = false
-                script.src = src
-
-                // crossorigin in HTML and crossOrigin in the DOM per HTML spec
-                if (opts.crossorigin) {
-                    script.crossOrigin = opts.crossorigin
-                }
-
-                // handle onload and onerror
-                script.onload = () => resolve(src)
-                script.onerror = () => reject(new Error(src))
-                opts.parent.appendChild(script)
-            })
-        }
-        return this.loaded[src]
-    }
-
 }
 
 declare module '@vue/runtime-core' {
 
     interface ComponentCustomProperties {
-        $scriptx: VueScriptX
+        $scriptPlacer: VueScriptPlacer
     }
 }
 
-export default new VueScriptX()
+export default new VueScriptPlacer()
